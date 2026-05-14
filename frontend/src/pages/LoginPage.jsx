@@ -1,0 +1,6 @@
+import { useState } from "react";
+import api from "../services/api";
+import { useAuth } from "../contexts/AuthContext";
+export default function LoginPage(){const {login}=useAuth(); const [username,setUsername]=useState("admin"); const [password,setPassword]=useState("admin12345"); const [error,setError]=useState("");
+const onSubmit=async(e)=>{e.preventDefault();try{const {data}=await api.post("/auth/login/",{username,password});login(data.access);window.location.href="/";}catch{setError("Falha no login.")}};
+return <div className="min-h-screen flex items-center justify-center px-4"><form onSubmit={onSubmit} className="w-full max-w-md rounded-2xl border border-cyan-500/30 bg-cyber-card/70 p-8"><h1 className="text-3xl font-bold mb-2">VisionGuard AI</h1><p className="text-cyan-300 mb-6">Painel Administrativo Seguro</p><input className="w-full mb-3 p-3 rounded bg-slate-900 border border-slate-700" value={username} onChange={(e)=>setUsername(e.target.value)}/><input type="password" className="w-full mb-4 p-3 rounded bg-slate-900 border border-slate-700" value={password} onChange={(e)=>setPassword(e.target.value)}/>{error&&<p className="text-red-400 text-sm mb-3">{error}</p>}<button className="w-full p-3 rounded bg-gradient-to-r from-cyan-500 to-violet-600 font-semibold">Entrar</button></form></div>}

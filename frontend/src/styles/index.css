@@ -1,0 +1,4 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+body{margin:0;font-family:'Segoe UI',sans-serif;background:radial-gradient(circle at top,#1d2b64 0%,#050816 55%,#03030a 100%);color:#e5ecff}
