@@ -45,7 +45,8 @@ cd visionguard-ai
 cd backend
 py -3.11 -m venv .venv
 .venv\Scripts\activate
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu torch==2.1.2+cpu torchvision==0.16.2+cpu
 pip install -r requirements.txt
 ```
 
@@ -95,7 +96,7 @@ VISION_CAMERA_CODE=CAM-001
 ```
 
 ## ✅ Como usar
-1. Acesse o backend em `http://localhost:8000`.
+1. Acesse o backend em `http://localhost:8000` (retorna informações do servidor).
 2. Acesse o painel em `http://localhost:5173`.
 3. Crie ou detecte câmeras via API/Dashboard.
 4. Inicie o pipeline em `vision/main.py`.

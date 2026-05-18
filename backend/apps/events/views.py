@@ -22,15 +22,33 @@ class EventViewSet(viewsets.ModelViewSet):
 class VisionIngestView(APIView):
     permission_classes = [IsVisionService]
 
+    def _normalize_field(self, payload, field):
+        value = payload.get(field)
+        if isinstance(value, str):
+            try:
+                payload[field] = json.loads(value)
+            except json.JSONDecodeError:
+                return
+        elif isinstance(value, (list, tuple)):
+            if field == "object_labels":
+                payload[field] = [str(item) for item in value]
+            elif field == "metadata":
+                if len(value) == 1 and isinstance(value[0], str):
+                    try:
+                        payload[field] = json.loads(value[0])
+                    except json.JSONDecodeError:
+                        payload[field] = {}
+            elif field == "detections":
+                if len(value) == 1 and isinstance(value[0], str):
+                    try:
+                        payload[field] = json.loads(value[0])
+                    except json.JSONDecodeError:
+                        pass
+
     def post(self, request):
         payload = request.data.copy()
         for field in ("object_labels", "metadata", "detections"):
-            value = payload.get(field)
-            if isinstance(value, str):
-                try:
-                    payload[field] = json.loads(value)
-                except json.JSONDecodeError:
-                    pass
+            self._normalize_field(payload, field)
         serializer = VisionIngestSerializer(data=payload)
         serializer.is_valid(raise_exception=True)
         event = serializer.save()

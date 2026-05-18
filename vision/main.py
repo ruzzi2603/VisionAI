@@ -1,9 +1,14 @@
 import json
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import cv2
 import requests
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR))
 
 from behavior.analyzer import BehaviorAnalyzer
 from detection.person_detector import PersonDetector
@@ -11,6 +16,15 @@ from face_capture.capture import FaceCapture
 from objects.object_detector import ObjectDetector
 from tracking.tracker import PersonTracker
 from visualization.annotator import draw_annotations
+YOLO_MODEL_PATH = Path(os.getenv("YOLO_MODEL_PATH", "yolov8n.pt"))
+if not YOLO_MODEL_PATH.is_absolute():
+    YOLO_MODEL_PATH = BASE_DIR / YOLO_MODEL_PATH
+
+RECORDINGS_DIR = Path(os.getenv("VISION_RECORDINGS_DIR", "captures/recordings"))
+if not RECORDINGS_DIR.is_absolute():
+    RECORDINGS_DIR = BASE_DIR / RECORDINGS_DIR
+
+VIDEO_BACKEND = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
 
 API_URL = os.getenv("VISION_API_URL", "http://127.0.0.1:8000/api/events/ingest/")
 VISION_TOKEN = os.getenv("VISION_INGEST_TOKEN", "visionguard-local-token")
@@ -18,10 +32,10 @@ CAMERA_CODE = os.getenv("VISION_CAMERA_CODE", "CAM-001")
 SENSITIVE_AREA = os.getenv("VISION_SENSITIVE_AREA", "False").lower() == "true"
 EVENT_END_TIMEOUT_SECONDS = int(os.getenv("VISION_EVENT_END_TIMEOUT_SECONDS", "4"))
 SCENE_COOLDOWN_SECONDS = int(os.getenv("VISION_SCENE_COOLDOWN_SECONDS", "8"))
-RECORDINGS_DIR = os.getenv("VISION_RECORDINGS_DIR", "captures/recordings")
-PROCESS_EVERY_N_FRAMES = int(os.getenv("VISION_PROCESS_EVERY_N_FRAMES", "2"))
-CAPTURE_WIDTH = int(os.getenv("VISION_CAPTURE_WIDTH", "960"))
-CAPTURE_HEIGHT = int(os.getenv("VISION_CAPTURE_HEIGHT", "540"))
+PROCESS_EVERY_N_FRAMES = int(os.getenv("VISION_PROCESS_EVERY_N_FRAMES", "4"))
+CAPTURE_WIDTH = int(os.getenv("VISION_CAPTURE_WIDTH", "640"))
+CAPTURE_HEIGHT = int(os.getenv("VISION_CAPTURE_HEIGHT", "360"))
+
 
 
 def _to_detection_rows(items: list[dict]) -> list[dict]:
@@ -42,20 +56,21 @@ def _to_detection_rows(items: list[dict]) -> list[dict]:
 
 
 def _save_evidence_frame(frame, tag: str) -> str:
-    os.makedirs("captures/events", exist_ok=True)
-    path = f"captures/events/{tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-    cv2.imwrite(path, frame)
-    return path
+    events_dir = BASE_DIR / "captures" / "events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    path = events_dir / f"{tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+    cv2.imwrite(str(path), frame)
+    return str(path)
 
 
 def _start_event_recorder(event_key: str, frame_shape):
-    os.makedirs(RECORDINGS_DIR, exist_ok=True)
+    RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
     safe_key = event_key.replace(":", "_")
-    path = os.path.join(RECORDINGS_DIR, f"{safe_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
+    path = RECORDINGS_DIR / f"{safe_key}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
     h, w = frame_shape[:2]
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(path, fourcc, 20.0, (w, h))
-    return writer, path
+    writer = cv2.VideoWriter(str(path), fourcc, 20.0, (w, h))
+    return writer, str(path)
 
 
 def _post_event(
@@ -132,12 +147,12 @@ def _is_suspicious_object_in_hand(track_bbox_xyxy: list[int], object_bbox_xywh: 
 
 
 def run_pipeline(source=0):
-    person_detector = PersonDetector(os.getenv("YOLO_MODEL_PATH", "yolov8n.pt"), conf=0.45, imgsz=640)
-    object_detector = ObjectDetector(os.getenv("YOLO_MODEL_PATH", "yolov8n.pt"), conf=0.4, imgsz=640)
+    person_detector = PersonDetector(str(YOLO_MODEL_PATH), conf=0.45, imgsz=640)
+    object_detector = ObjectDetector(str(YOLO_MODEL_PATH), conf=0.4, imgsz=640)
     tracker = PersonTracker()
     behavior = BehaviorAnalyzer()
     face_capture = FaceCapture()
-    cap = cv2.VideoCapture(source, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(source, VIDEO_BACKEND)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, 30)
@@ -149,6 +164,7 @@ def run_pipeline(source=0):
     last_people = []
     last_objects = []
     last_tracks = []
+    last_heartbeat = datetime.now()
 
     while True:
         ok, frame = cap.read()
@@ -157,6 +173,19 @@ def run_pipeline(source=0):
 
         frame_idx += 1
         now = datetime.now()
+        
+        # Enviar heartbeat a cada 5 segundos
+        if (now - last_heartbeat).total_seconds() >= 5:
+            try:
+                requests.post(
+                    f"{API_URL.replace('/api/events/ingest/', '')}/api/cameras/1/heartbeat/",
+                    headers={"X-Vision-Token": VISION_TOKEN},
+                    timeout=2,
+                )
+            except:
+                pass
+            last_heartbeat = now
+        
         run_detection = frame_idx % max(1, PROCESS_EVERY_N_FRAMES) == 0
         if run_detection:
             people = person_detector.detect(frame)
@@ -193,11 +222,12 @@ def run_pipeline(source=0):
 
                 if is_new:
                     evidence = _save_evidence_frame(frame, f"{event_type}_{track['track_id']}")
-                    os.makedirs("captures/suspects", exist_ok=True)
+                    face_dir = BASE_DIR / "captures" / "suspects"
+                    face_dir.mkdir(parents=True, exist_ok=True)
                     face_capture.capture(
                         frame,
                         track["bbox"],
-                        f"captures/suspects/face_{track['track_id']}_{now.strftime('%Y%m%d_%H%M%S')}.jpg",
+                        str(face_dir / f"face_{track['track_id']}_{now.strftime('%Y%m%d_%H%M%S')}.jpg"),
                     )
                     relevant_objects = suspicious_in_hand if event_type == "suspicious_object_in_hand" else objects
                     _post_event(
@@ -282,4 +312,8 @@ def run_pipeline(source=0):
 
 
 if __name__ == "__main__":
-    run_pipeline(0)
+    source = 0
+    if len(sys.argv) > 1:
+        source_arg = sys.argv[1]
+        source = int(source_arg) if source_arg.isdigit() else source_arg
+    run_pipeline(source)
